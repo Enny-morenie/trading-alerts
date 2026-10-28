@@ -4,12 +4,15 @@ on:
   schedule:
     # Every 5 min, Mon-Fri, 13:00-21:59 UTC = US market hours in both summer and winter time
     - cron: "*/5 13-21 * * 1-5"
+    # Evening scan for new setups, after the US close (21:40 UTC)
+    - cron: "40 21 * * 1-5"
   workflow_dispatch:
     inputs:
-      test:
-        description: "Send a test Telegram message with current prices"
-        type: boolean
-        default: false
+      mode:
+        description: "test = send prices + current setups now; scan = evening scan; intraday = normal check"
+        type: choice
+        options: [test, scan, intraday]
+        default: test
 
 concurrency:
   group: stock-alerts
@@ -18,23 +21,23 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
-      # Remembers which alerts already fired, so you aren't spammed every 5 minutes
+      # Remembers alerts already sent, pending setups and open trades
       - uses: actions/cache/restore@v4
         with:
           path: stock_state.json
           key: stock-state-${{ github.run_id }}
           restore-keys: stock-state-
 
-      - name: Check prices
+      - name: Run alerts
         run: python3 stock_alert.py
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          ALERT_TEST: ${{ inputs.test && '1' || '0' }}
+          MODE: ${{ inputs.mode || (github.event.schedule == '40 21 * * 1-5' && 'scan' || 'intraday') }}
 
       - uses: actions/cache/save@v4
         if: always()
