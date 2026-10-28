@@ -11,6 +11,7 @@ import csv
 import io
 import json
 import os
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -59,8 +60,20 @@ def send_telegram(text):
         with urllib.request.urlopen(req, timeout=25) as r:
             r.read()
         print("Telegram message sent")
+    except urllib.error.HTTPError as e:
+        # Print Telegram's own reason (it never contains the token); never print the URL
+        try:
+            reason = json.loads(e.read().decode()).get("description", "")
+        except Exception:
+            reason = ""
+        print(f"Telegram send failed: HTTP {e.code} {reason}")
+        hints = {401: "-> TELEGRAM_BOT_TOKEN is wrong. Re-copy it from BotFather.",
+                 400: "-> TELEGRAM_CHAT_ID is wrong, or you haven't pressed Start in your bot's chat.",
+                 403: "-> You haven't pressed Start in your bot's chat, or you blocked the bot.",
+                 404: "-> TELEGRAM_BOT_TOKEN is wrong or incomplete. Re-copy it from BotFather."}
+        print(hints.get(e.code, ""))
     except Exception as e:
-        print(f"Telegram send failed: {type(e).__name__}")  # never print the URL (contains token)
+        print(f"Telegram send failed: {type(e).__name__}")
 
 
 def load(path, default):
