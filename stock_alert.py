@@ -285,17 +285,47 @@ def fmt(p):
     return f"${p:,.2f}"
 
 
+_FX = {}
+
+
+def usd_per(currency):
+    """How many USD one unit of the account currency buys (1.0 for USD)."""
+    currency = (currency or "USD").upper()
+    if currency == "USD":
+        return 1.0
+    if currency not in _FX:
+        try:
+            _FX[currency] = quote(f"{currency}USD=X")[0]
+        except Exception as e:
+            print(f"FX rate {currency}USD unavailable ({type(e).__name__})")
+            _FX[currency] = None
+    return _FX[currency]
+
+
 def size_line(cfg, plan):
     acct = cfg.get("account", {})
-    size = acct.get("size_usd")
+    cur = (acct.get("currency") or "USD").upper()
+    size = acct.get("size") or acct.get("size_usd")
     if not size:
         return "Size: add your account size in stock_config.json to get share counts"
-    risk_amt = size * acct.get("risk_pct", 1) / 100
+    fx = usd_per(cur)
+    if not fx:
+        return "Size: currency rate unavailable right now, size manually (risk 1% of account)"
+    sym = {"EUR": "€", "GBP": "£", "USD": "$"}.get(cur, cur + " ")
+    size_usd = size * fx
+    risk_pct = acct.get("risk_pct", 1)
+    risk_usd = size_usd * risk_pct / 100
     per_share = abs(plan["trigger"] - plan["stop"])
-    shares = math.floor(risk_amt / per_share) if per_share > 0 else 0
-    cap = math.floor(size * acct.get("max_position_pct", 20) / 100 / plan["trigger"])
-    shares = max(0, min(shares, cap))
-    return f"Size: {shares} shares (risk ~{fmt(shares * per_share)} = {acct.get('risk_pct', 1)}% of account)"
+    if per_share <= 0:
+        return ""
+    raw = min(risk_usd / per_share, size_usd * acct.get("max_position_pct", 20) / 100 / plan["trigger"])
+    shares = math.floor(raw * 100) / 100 if acct.get("fractional", True) else math.floor(raw)
+    if shares <= 0:
+        return "Size: too small for whole shares at this price. Skip, or use fractional shares."
+    pos = shares * plan["trigger"] / fx
+    risk = shares * per_share / fx
+    return (f"Size: {shares:g} shares ≈ {sym}{pos:,.0f} position, "
+            f"risk ≈ {sym}{risk:,.2f} ({risk_pct}% of account)")
 
 
 def plan_text(sym, p, cfg):

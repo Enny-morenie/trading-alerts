@@ -1,8 +1,10 @@
 {
   "account": {
-    "size_usd": null,
+    "size": 500,
+    "currency": "EUR",
     "risk_pct": 1,
-    "max_position_pct": 20
+    "max_position_pct": 20,
+    "fractional": true
   },
   "signals": {
     "enabled": true,
