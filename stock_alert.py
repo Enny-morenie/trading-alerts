@@ -56,6 +56,19 @@ def quote(sym):
 
 
 def daily_bars(sym):
+    """Completed daily candles only (drops today's candle while the US market is still open)."""
+    bars = _daily_bars_raw(sym)
+    try:
+        from zoneinfo import ZoneInfo
+        ny = datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        ny = None
+    if bars and ny and bars[-1]["date"] == ny.strftime("%Y-%m-%d") and (ny.hour, ny.minute) < (16, 15):
+        bars = bars[:-1]
+    return bars
+
+
+def _daily_bars_raw(sym):
     """About one year of daily candles: list of dicts date/o/h/l/c/v, oldest first."""
     try:
         data = json.loads(http_get(
@@ -370,7 +383,7 @@ def wanted(cfg, p):
 def run_scan(cfg, state, test=False):
     tickers = cfg.get("tickers", {})
     mkt = market_trend()
-    msgs = []
+    msgs, scanned = [], None
     for sym in tickers:
         st = state.setdefault(sym, {})
         try:
@@ -384,6 +397,7 @@ def run_scan(cfg, state, test=False):
         new_session = st.get("last_scan_bar") != last_date
         if new_session and not test:
             st["last_scan_bar"] = last_date
+            scanned = last_date
             # age pending setups and open trades by one session
             st["setups"] = [s for s in st.get("setups", []) if s.get("age", 0) + 1 <= SETUP_VALID_DAYS]
             for s in st["setups"]:
@@ -405,7 +419,9 @@ def run_scan(cfg, state, test=False):
             if not test:
                 p["age"] = 0
                 st.setdefault("setups", []).append(p)
-    return msgs, mkt
+    if test:
+        return msgs, mkt
+    return msgs, mkt, scanned
 
 
 def run_intraday(cfg, state):
@@ -491,14 +507,7 @@ def main():
     mode = os.environ.get("MODE", "intraday")
     print("Mode:", mode)
 
-    if mode == "scan":
-        msgs, _ = run_scan(cfg, state)
-        if msgs:
-            send_telegram("📊 Evening scan: new trade setups\n\n" + "\n\n".join(msgs) +
-                          "\n\nRule-based signals, not financial advice.")
-        else:
-            print("No new setups")
-    elif mode == "test":
+    if mode == "test":
         _, quotes = run_intraday(cfg, {})
         setups, mkt = run_scan(cfg, {}, test=True)
         trend = {True: "up", False: "down", None: "unknown"}[mkt]
@@ -506,12 +515,28 @@ def main():
                       ("Setups on the latest daily candle:\n\n" + "\n\n".join(setups) if setups
                        else "No setups on the latest daily candle right now."))
     else:
-        msgs, quotes = run_intraday(cfg, state)
-        print("Quotes:", "; ".join(quotes) or "none")
-        if msgs:
-            send_telegram("\n\n".join(msgs))
+        # Daily scan: runs on whichever run first sees a newly completed daily candle,
+        # so a skipped evening run is caught up on the next run.
+        msgs, mkt, scanned = run_scan(cfg, state)
+        if scanned:
+            pending = sum(len(state.get(t, {}).get("setups", [])) for t in cfg.get("tickers", {}))
+            open_ = sum(len(state.get(t, {}).get("trades", [])) for t in cfg.get("tickers", {}))
+            trend = {True: "up", False: "down", None: "unknown"}[mkt]
+            head = f"📊 Daily scan ({scanned} close) · S&P 500 trend: {trend}\n"
+            foot = f"\n\nWatching {pending} setup(s), {open_} open trade(s). Rule-based signals, not financial advice."
+            if msgs:
+                send_telegram(head + "\n" + "\n\n".join(msgs) + foot)
+            else:
+                send_telegram(head + "No new setups today." + foot)
         else:
-            print("No alerts")
+            print("Daily scan already done for the latest candle")
+
+        alerts, quotes = run_intraday(cfg, state)
+        print("Quotes:", "; ".join(quotes) or "none")
+        if alerts:
+            send_telegram("\n\n".join(alerts))
+        else:
+            print("No intraday alerts")
 
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
